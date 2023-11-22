@@ -1,0 +1,17 @@
+{
+    "compilerOptions": {
+        "lib": [
+            "ESNext.AsyncIterable"
+        ],
+        "module": "ESNext",
+        "target": "ESNext",
+        "moduleResolution": "Node",
+        "sourceMap": true,
+        "strict": true,
+        "resolveJsonModule": true,
+        "esModuleInterop": true,
+        "allowSyntheticDefaultImports": true,
+        "baseUrl": ".",
+        "noImplicitAny": true,
+    },
+}
