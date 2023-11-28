@@ -1,4 +1,4 @@
-import { NewUser, userRepository, userTableSchema } from "./User";
+import { userRepository } from "./User";
 import { eq } from "drizzle-orm";
 import { db } from "database/connection";
 import { makeExecutableSchema } from "@graphql-tools/schema";
@@ -10,6 +10,7 @@ import { HttpStatus } from "http-status-ts"
 import { authTableSchema } from "database/schema";
 import { JWT_KEY } from "env";
 import { SKIP_AUTH_DIRECTIVE_SDL } from "@envelop/generic-auth";
+import { AuthGraphQLContext } from "context";
 
 interface LoginArgs {
     username: string;
@@ -49,10 +50,14 @@ const PasswordNotMatchException = createGraphQLError("PasswordNotMatchException"
 
 const authRepository = {
     async login(username: string, password: string) {
-        const users = await db.select().from(userTableSchema).where(eq(userTableSchema.username, username))
-        if (users.length === 0) throw NotFoundUserException
+        const user = await db.query.userTableSchema.findFirst({
+            where: (userSchema, clauses) => clauses.eq(userSchema.username, username),
+            with: {
+                authentication: true
+            }
+        })
+        if (!user) throw NotFoundUserException
 
-        const user = users[0]
         if (!await argon2.verify(user.password, password)) throw PasswordNotMatchException
 
         const expiresIn = ms('1h')
@@ -62,11 +67,10 @@ const authRepository = {
             expiresIn: expiresIn / 1000
         })
 
-        const authData = await db.select({ id: authTableSchema.id }).from(authTableSchema).where(eq(authTableSchema.user_id, user.id))
-        if (authData.length === 0) {
+        if (user.authentication === null) {
             await db.insert(authTableSchema).values({ user_id: user.id })
         } else {
-            await db.update(authTableSchema).set({ last_login: new Date().toISOString() }).where(eq(authTableSchema.id, authData[0].id))
+            await db.update(authTableSchema).set({ last_login: new Date().toISOString() }).where(eq(authTableSchema.id, user.authentication.id))
         }
 
         return {
@@ -109,7 +113,7 @@ const typeDefs = [
 
 const resolvers = {
     Query: {
-        me: async (_: unknown, args: unknown, context: unknown) => {
+        me: async (_: unknown, args: unknown, context: AuthGraphQLContext) => {
             console.log(context)
             return "Test"
         },
