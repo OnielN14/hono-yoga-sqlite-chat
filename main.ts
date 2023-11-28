@@ -14,6 +14,7 @@ import { schema as authSchema, resolvers as authResolvers } from "modules/Auth"
 import { JWT_KEY } from "env"
 import { GraphQLError } from "graphql"
 import { HttpStatus } from "http-status-ts"
+import { CommonGraphQLContext } from "context"
 
 const schema = createSchema({
     typeDefs: [
@@ -35,10 +36,18 @@ const yogaGraphqlInstance = createYoga({
     plugins: [
         useGenericAuth({
             mode: 'protect-all',
-            resolveUserFn: async (ctx) => {
+            resolveUserFn: async (ctx: CommonGraphQLContext) => {
                 try {
-                    const result = jsonwebtoken.verify(ctx.request.headers.get('authorization'), JWT_KEY) as JwtPayload
+                    const token = ctx.request.headers.get('authorization')
+                    if (!token) throw new UnauthenticatedError("Unauthenticated", {
+                        extensions: {
+                            http: {
+                                status: HttpStatus.UNAUTHORIZED
+                            }
+                        }
+                    })
 
+                    const result = jsonwebtoken.verify(token, JWT_KEY) as JwtPayload
                     if (!result.sub) throw new GraphQLError("Invalid", {
                         extensions: {
                             http: {
@@ -46,8 +55,8 @@ const yogaGraphqlInstance = createYoga({
                             }
                         }
                     })
-                    const users = await userRepository.findByEmail(result.sub)
-                    if (users.length === 0) throw new GraphQLError("User Invalid", {
+                    const user = await userRepository.findByEmail(result.sub)
+                    if (!user) throw new GraphQLError("User Invalid", {
                         extensions: {
                             http: {
                                 status: HttpStatus.UNAUTHORIZED
@@ -55,7 +64,7 @@ const yogaGraphqlInstance = createYoga({
                         }
                     })
 
-                    return users[0]
+                    return user
                 } catch (e) {
                     return null
                 }
