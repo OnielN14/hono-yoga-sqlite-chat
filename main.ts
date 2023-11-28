@@ -11,6 +11,7 @@ import { UnauthenticatedError, useGenericAuth } from "@envelop/generic-auth"
 import jsonwebtoken, { JwtPayload } from 'jsonwebtoken'
 import { userRepository, schema as userSchema, resolvers as userResolvers } from "modules/User"
 import { schema as authSchema, resolvers as authResolvers } from "modules/Auth"
+import { schema as chatSchema, resolvers as chatResolvers } from "modules/Chat"
 import { JWT_KEY } from "env"
 import { GraphQLError } from "graphql"
 import { HttpStatus } from "http-status-ts"
@@ -19,11 +20,13 @@ import { CommonGraphQLContext } from "context"
 const schema = createSchema({
     typeDefs: [
         userSchema,
-        authSchema
+        authSchema,
+        chatSchema
     ],
     resolvers: [
         userResolvers,
-        authResolvers
+        authResolvers,
+        chatResolvers
     ]
 })
 

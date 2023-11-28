@@ -1,18 +1,29 @@
 import { SKIP_AUTH_DIRECTIVE_SDL } from "@envelop/generic-auth"
-import { makeExecutableSchema } from "@graphql-tools/schema"
 import { db } from "database/connection"
 import { conversationTableSchema, messageTableSchema, participantTableSchema } from "database/schema"
 import { eq } from "drizzle-orm"
-import { PubSub } from "graphql-yoga"
+import { createPubSub, createSchema } from "graphql-yoga"
 import { AuthGraphQLContext } from "context"
+
+const pubsub = createPubSub<{
+    'chat:conversationList': [userId: number, payload: string],
+    'chat:conversation': [conversationId: number, incomingMessage: typeof messageTableSchema.$inferSelect]
+}>()
 
 const chatRepository = {
     async sendMessage(senderId: number, conversationId: number, message: string) {
-        await db.insert(messageTableSchema).values({
+        const insertResult = await db.insert(messageTableSchema).values({
             conversation_id: conversationId,
             sender_id: senderId,
             content: message,
-        })
+        }).returning()
+
+
+        await db.update(conversationTableSchema).set({
+            updated_at: new Date().toISOString()
+        }).where(eq(conversationTableSchema.id, conversationId))
+
+        return insertResult
     },
     async createConversation(users: number[]) {
         let name = ""
@@ -72,6 +83,10 @@ const chatRepository = {
 const typeDefs = [
     SKIP_AUTH_DIRECTIVE_SDL,
     /* GraphQL */ `
+        type User {
+            id: ID!
+        }
+
         type Participant {
             created_at: String!
             updated_at: String!
@@ -86,22 +101,22 @@ const typeDefs = [
         }
 
         type Conversation {
-            participants: Participant[]
-            messages: Message[]
+            participants: [Participant]
+            messages: [Message]
             updated_at: String!
         }
 
         type Query {
-            conversations: Conversation[]
+            conversations: [Conversation]
         }
 
         type Mutation {
-            sendMessage(content: String!, conversation_id: ID!)
+            sendMessage(content: String!, conversation_id: ID!): Boolean
         }
 
         type Subscription {
-            listenConversation(conversation_id: ID!)
-            listenConversationList(): Conversation[]
+            listenConversation(conversation_id: ID!): Message!
+            listenConversationList: [Conversation]
         }
     `
 ]
@@ -113,21 +128,29 @@ const resolvers = {
         }
     },
     Mutation: {
-        sendMessage(_: unknown, args: unknown) {
+        async sendMessage(_: unknown, args: { content: string, conversation_id: number }, ctx: AuthGraphQLContext) {
+            const message = await chatRepository.sendMessage(ctx.currentUser.id, args.conversation_id, args.content)
 
+            pubsub.publish("chat:conversation", args.conversation_id, message[0])
         }
     },
     Subscription: {
-        listenConversation(_: unknown, args: unknown) {
-
+        listenConversation: {
+            subscribe: (_: unknown, args: { conversation_id: number }) => {
+                return pubsub.subscribe("chat:conversation", args.conversation_id)
+            },
+            resolve: (payload: unknown) => payload
         },
-        listenConversationList(_: unknown, args: unknown) {
-
-        },
+        listenConversationList: {
+            subscribe: (_: unknown, _args: unknown, ctx: AuthGraphQLContext) => {
+                return pubsub.subscribe("chat:conversationList", ctx.currentUser.id)
+            },
+            resolve: (payload: unknown) => payload
+        }
     },
 }
 
-const schema = makeExecutableSchema({
+const schema = createSchema({
     typeDefs,
     resolvers
 })
