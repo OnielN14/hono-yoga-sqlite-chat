@@ -23,7 +23,7 @@ const chatRepository = {
             updated_at: new Date().toISOString()
         }).where(eq(conversationTableSchema.id, conversationId))
 
-        return insertResult
+        return insertResult[0]
     },
     async createConversation(users: number[]) {
         let name = ""
@@ -112,6 +112,7 @@ const typeDefs = [
 
         type Mutation {
             sendMessage(content: String!, conversation_id: ID!): Boolean
+            sendMessageInitial(content: String!, participant_ids: [Int]): Boolean
         }
 
         type Subscription {
@@ -131,8 +132,14 @@ const resolvers = {
         async sendMessage(_: unknown, args: { content: string, conversation_id: number }, ctx: AuthGraphQLContext) {
             const message = await chatRepository.sendMessage(ctx.currentUser.id, args.conversation_id, args.content)
 
-            pubsub.publish("chat:conversation", args.conversation_id, message[0])
-        }
+            pubsub.publish("chat:conversation", args.conversation_id, message)
+        },
+        async sendMessageInitial(_: unknown, args: { content: string, participant_ids: number[] }, ctx: AuthGraphQLContext) {
+            const conversation = await chatRepository.createConversation(args.participant_ids)
+            await this.sendMessage(_, { content: args.content, conversation_id: conversation.id }, ctx)
+
+            pubsub.publish('chat:conversationList', ctx.currentUser.id, "")
+        },
     },
     Subscription: {
         listenConversation: {
