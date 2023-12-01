@@ -1,11 +1,10 @@
 import { userRepository } from "./User";
 import { eq } from "drizzle-orm";
 import { db } from "database/connection";
-import { makeExecutableSchema } from "@graphql-tools/schema";
 import argon2 from 'argon2'
 import jwt from 'jsonwebtoken'
 import ms from "ms"
-import { createGraphQLError } from "graphql-yoga";
+import { createGraphQLError, createSchema } from "graphql-yoga";
 import { HttpStatus } from "http-status-ts"
 import { authTableSchema } from "database/schema";
 import { JWT_KEY } from "env";
@@ -141,8 +140,12 @@ const resolvers = {
         register: {
             resolve: async (_: unknown, args: { payload: RegisterArgs }) => {
                 try {
-                    const existingUser = await userRepository.findByEmail(args.payload.email)
-                    if (existingUser) throw UserAlreadyExist
+                    const [existingUserEmail, existingUsername] = await Promise.all([
+                        userRepository.findByEmail(args.payload.email),
+                        userRepository.findByUsername(args.payload.username)
+                    ])
+
+                    if (existingUserEmail || existingUsername) throw UserAlreadyExist
 
                     await userRepository.create(args.payload)
 
@@ -162,7 +165,7 @@ const resolvers = {
     }
 }
 
-const schema = makeExecutableSchema({
+const schema = createSchema({
     typeDefs,
     resolvers,
 })
