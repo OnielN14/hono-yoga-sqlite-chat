@@ -6,7 +6,7 @@ import { createPubSub, createSchema } from "graphql-yoga"
 import { AuthGraphQLContext } from "context"
 
 const pubsub = createPubSub<{
-    'chat:conversationList': [userId: number, payload: string],
+    'chat:conversationList': [userId: number, newConversation: typeof conversationTableSchema.$inferSelect],
     'chat:conversation': [conversationId: number, incomingMessage: typeof messageTableSchema.$inferSelect]
 }>()
 
@@ -38,7 +38,7 @@ const chatRepository = {
 
         const conversations = await db.insert(conversationTableSchema)
             .values({ name })
-            .returning({ id: conversationTableSchema.id })
+            .returning()
 
         const participantValues: typeof participantTableSchema.$inferInsert[] = users.map((userId) => ({
             conversation_id: conversations[0].id,
@@ -50,11 +50,13 @@ const chatRepository = {
         return conversations[0]
     },
     async getConversationsByUser(userId: number) {
-        const conversationIdsSubQuery = db.select().from(conversationTableSchema).innerJoin(participantTableSchema, eq(participantTableSchema.conversation_id, conversationTableSchema.id)).where(eq(participantTableSchema.user_id, userId)).as("convoIds")
+        const conversationIdsSubQuery = await db.select({
+            id: conversationTableSchema.id
+        }).from(conversationTableSchema).innerJoin(participantTableSchema, eq(participantTableSchema.conversation_id, conversationTableSchema.id)).where(eq(participantTableSchema.user_id, userId)).groupBy(conversationTableSchema.id)
 
-        const conversations = await db.query.conversationTableSchema.findMany({
+        const query = db.query.conversationTableSchema.findMany({
             where: (conversationSchema, clauses) => {
-                return clauses.inArray(conversationSchema.id, conversationIdsSubQuery)
+                return clauses.inArray(conversationSchema.id, conversationIdsSubQuery.map((v) => v.id))
             },
             with: {
                 participants: {
@@ -76,6 +78,8 @@ const chatRepository = {
             }
         })
 
+        const conversations = await query
+
         return conversations
     }
 }
@@ -88,12 +92,14 @@ const typeDefs = [
         }
 
         type Participant {
+            id: ID!
             created_at: String!
             updated_at: String!
             user: User!
         }
 
         type Message {
+            id: ID!
             content: String!
             created_at: String!
             updated_at: String!
@@ -101,6 +107,7 @@ const typeDefs = [
         }
 
         type Conversation {
+            id: ID!
             participants: [Participant]
             messages: [Message]
             updated_at: String!
@@ -108,6 +115,7 @@ const typeDefs = [
 
         type Query {
             conversations: [Conversation]
+            conversation(conversation_id: ID!): Conversation
         }
 
         type Mutation {
@@ -126,6 +134,32 @@ const resolvers = {
     Query: {
         async conversations(_: unknown, _args: unknown, ctx: AuthGraphQLContext) {
             return chatRepository.getConversationsByUser(ctx.currentUser.id)
+        },
+        async conversation(_: unknown, args: { conversation_id: number }) {
+            return await db.query.conversationTableSchema.findFirst({
+                where: (conversationSchema, clauses) => {
+                    return clauses.eq(conversationSchema.id, args.conversation_id)
+                },
+                with: {
+                    participants: {
+                        with: {
+                            user: {
+                                columns: {
+                                    id: true
+                                },
+                                extras: (fields, { sql }) => ({
+                                    name: sql`${fields.username}`.as("name")
+                                }),
+                            }
+                        }
+                    },
+                    messages: {
+                        limit: 50,
+                        orderBy: (fields, operators) => [operators.desc(fields.created_at)],
+                    }
+                }
+            })
+
         }
     },
     Mutation: {
@@ -137,8 +171,9 @@ const resolvers = {
         async sendMessageInitial(_: unknown, args: { content: string, participant_ids: number[] }, ctx: AuthGraphQLContext) {
             const conversation = await chatRepository.createConversation(args.participant_ids)
             await this.sendMessage(_, { content: args.content, conversation_id: conversation.id }, ctx)
+            pubsub.publish('chat:conversationList', ctx.currentUser.id, conversation)
 
-            pubsub.publish('chat:conversationList', ctx.currentUser.id, "")
+            return true
         },
     },
     Subscription: {
